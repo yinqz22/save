@@ -1,219 +1,145 @@
 
 import os
 
-# Create the output directory first
 os.makedirs('/mnt/agents/output', exist_ok=True)
-print("✅ Directory created: /mnt/agents/output")
 
-# Now create all files
-
-# 1. requirements.txt
-requirements = """requests>=2.31.0
+kahoot_bot_simple = '''#!/usr/bin/env python3
+"""
+Kahoot Bot - Einfache Version
+Ändere PIN und NAMEN unten im Code, dann starten!
 """
 
-with open('/mnt/agents/output/requirements.txt', 'w') as f:
-    f.write(requirements)
-print("✅ requirements.txt created")
-
-# 2. Procfile
-procfile = """worker: python kahoot_bot.py
-"""
-
-with open('/mnt/agents/output/Procfile', 'w') as f:
-    f.write(procfile)
-print("✅ Procfile created")
-
-# 3. kahoot_bot.py (Railway compatible version)
-kahoot_bot = '''#!/usr/bin/env python3
-"""
-Kahoot Bot - Railway Compatible Version
-Uses environment variables instead of interactive input
-"""
-
-import os
 import requests
-import json
 import time
 import random
 import string
 import threading
-import sys
 
-# Get config from environment variables
-PIN = os.environ.get("KAHOOT_PIN", "")
-NUM_BOTS = int(os.environ.get("KAHOOT_NUM_BOTS", "5"))
-BASE_NAME = os.environ.get("KAHOOT_BASE_NAME", "bot")
-NAME_OPTION = os.environ.get("KAHOOT_NAME_OPTION", "1")
-JOIN_DELAY = float(os.environ.get("KAHOOT_JOIN_DELAY", "0.5"))
+# ═══════════════════════════════════════════
+# HIER KONFIGURIEREN - Einfach ändern!
+# ═══════════════════════════════════════════
 
-if not PIN:
-    print("[!] ERROR: KAHOOT_PIN environment variable is required!")
-    print("Set it in Railway dashboard: Variables -> KAHOOT_PIN = your_pin")
-    sys.exit(1)
+KAHOOT_PIN = "4717427"      # <-- Game PIN hier eingeben
+BOT_NAME = "bot"             # <-- Bot Name hier eingeben
+NUM_BOTS = 10                # <-- Anzahl Bots (1-50)
+JOIN_DELAY = 0.5             # <-- Sekunden zwischen Joins
 
-if NUM_BOTS < 1 or NUM_BOTS > 50:
-    print("[!] ERROR: KAHOOT_NUM_BOTS must be between 1 and 50")
-    sys.exit(1)
+# ═══════════════════════════════════════════
+# AB HIER NICHTS MEHR ÄNDERN!
+# ═══════════════════════════════════════════
 
 
 class KahootBot:
-    def __init__(self, pin, name, bot_id=0):
+    def __init__(self, pin, name):
         self.pin = pin
         self.name = name
-        self.bot_id = bot_id
         self.session = requests.Session()
         self.session.headers.update({
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
             "Accept": "application/json, text/plain, */*",
-            "Accept-Language": "en-US,en;q=0.9",
             "Origin": "https://kahoot.it",
             "Referer": "https://kahoot.it/"
         })
         self.connected = False
-        self.client_id = None
-        self.game_session = None
 
-    def get_session_token(self):
+    def get_session(self):
         try:
             url = f"https://kahoot.it/reserve/session/{self.pin}/?{int(time.time() * 1000)}"
             response = self.session.get(url, timeout=10)
             if response.status_code == 200:
-                data = response.json()
-                self.game_session = data
-                return True
-            else:
-                print(f"[{self.name}] Failed to get session: {response.status_code}")
-                return False
-        except Exception as e:
-            print(f"[{self.name}] Error: {e}")
-            return False
+                return response.json()
+            return None
+        except:
+            return None
 
-    def join_game(self):
+    def join(self):
         try:
-            if not self.get_session_token():
+            session = self.get_session()
+            if not session:
+                print(f"[X] {self.name} - Session nicht gefunden")
                 return False
 
-            challenge_url = f"https://kahoot.it/rest/challenges/{self.pin}/join"
-            headers = {
-                "Content-Type": "application/json",
-                "x-kahoot-session-token": self.game_session.get("token", "") if self.game_session else ""
-            }
-            payload = {
-                "gameMode": "normal",
-                "nickname": self.name,
-                "kahootId": None
-            }
+            url = f"https://kahoot.it/rest/challenges/{self.pin}/join"
+            headers = {"Content-Type": "application/json"}
+            payload = {"gameMode": "normal", "nickname": self.name, "kahootId": None}
 
-            response = self.session.post(challenge_url, json=payload, headers=headers, timeout=10)
+            response = self.session.post(url, json=payload, headers=headers, timeout=10)
 
             if response.status_code in [200, 201]:
-                print(f"[OK] {self.name} joined successfully!")
+                print(f"[OK] {self.name} ist beigetreten!")
                 self.connected = True
                 return True
             else:
-                return self.join_alternative()
+                # Alternative Methode
+                return self.join_alt()
         except Exception as e:
-            print(f"[{self.name}] Error joining: {e}")
+            print(f"[X] {self.name} Fehler: {e}")
             return False
 
-    def join_alternative(self):
+    def join_alt(self):
         try:
             url = "https://kahoot.it/cometd/"
-            handshake = [{
-                "channel": "/meta/handshake",
-                "version": "1.0",
-                "minimumVersion": "1.0",
-                "supportedConnectionTypes": ["websocket", "long-polling"],
-                "advice": {"timeout": 60000, "interval": 0}
-            }]
-
+            handshake = [{"channel": "/meta/handshake", "version": "1.0", "minimumVersion": "1.0",
+                          "supportedConnectionTypes": ["long-polling"], "advice": {"timeout": 60000, "interval": 0}}]
             response = self.session.post(url, json=handshake, timeout=10)
             if response.status_code == 200:
                 data = response.json()
                 if isinstance(data, list) and len(data) > 0:
-                    self.client_id = data[0].get("clientId")
-                    join_msg = [{
-                        "channel": "/service/controller",
-                        "clientId": self.client_id,
-                        "data": {
-                            "gameid": str(self.pin),
-                            "host": "kahoot.it",
-                            "name": self.name,
-                            "type": "login"
-                        },
-                        "id": str(random.randint(100, 999))
-                    }]
+                    client_id = data[0].get("clientId")
+                    join_msg = [{"channel": "/service/controller", "clientId": client_id,
+                                 "data": {"gameid": str(self.pin), "host": "kahoot.it", "name": self.name, "type": "login"},
+                                 "id": str(random.randint(100, 999))}]
                     response = self.session.post(url, json=join_msg, timeout=10)
                     if response.status_code == 200:
-                        print(f"[OK] {self.name} connected!")
+                        print(f"[OK] {self.name} verbunden!")
                         self.connected = True
                         return True
             return False
-        except Exception as e:
-            print(f"[{self.name}] Alt join error: {e}")
+        except:
             return False
 
-    def keep_alive(self):
-        while self.connected:
-            try:
-                time.sleep(30)
-            except:
-                break
-
     def run(self):
-        success = self.join_game()
-        if success:
-            self.keep_alive()
-
-
-def generate_name(base, index, option):
-    if option == "1":
-        return f"{base}{index}"
-    elif option == "2":
-        suffix = "".join(random.choices(string.ascii_lowercase + string.digits, k=4))
-        return f"{base}_{suffix}"
-    else:
-        return base
+        self.join()
+        while self.connected:
+            time.sleep(30)
 
 
 def main():
-    print("=" * 50)
-    print("  KAHOOT BOT - Railway Deployment")
-    print("=" * 50)
-    print(f"PIN: {PIN}")
+    print("=" * 45)
+    print("  KAHOOT BOT - Startet...")
+    print("=" * 45)
+    print(f"PIN: {KAHOOT_PIN}")
+    print(f"Name: {BOT_NAME}")
     print(f"Bots: {NUM_BOTS}")
-    print(f"Base name: {BASE_NAME}")
-    print(f"Style: {\"Sequential\" if NAME_OPTION == \"1\" else \"Random\" if NAME_OPTION == \"2\" else \"Same\"}")
-    print(f"Delay: {JOIN_DELAY}s")
-    print("=" * 50 + "\\n")
+    print("=" * 45 + "\\n")
 
     bots = []
     threads = []
 
     for i in range(1, NUM_BOTS + 1):
-        name = generate_name(BASE_NAME, i, NAME_OPTION)
-        bot = KahootBot(PIN, name, i)
+        name = f"{BOT_NAME}{i}"
+        bot = KahootBot(KAHOOT_PIN, name)
         bots.append(bot)
 
-        thread = threading.Thread(target=bot.run, daemon=True)
-        threads.append(thread)
-        thread.start()
+        t = threading.Thread(target=bot.run, daemon=True)
+        threads.append(t)
+        t.start()
 
-        if JOIN_DELAY > 0:
-            time.sleep(JOIN_DELAY)
+        time.sleep(JOIN_DELAY)
 
-    print("\\n[OK] All bots deployed! Press Ctrl+C to stop.\\n")
+    print(f"\\n[OK] {NUM_BOTS} Bots gestartet!")
+    print("Drücke Ctrl+C zum Stoppen\\n")
 
     try:
         while True:
             time.sleep(5)
-            connected = sum(1 for b in bots if b.connected)
-            print(f"Active: {connected}/{NUM_BOTS} | {time.strftime(\"%H:%M:%S\")}")
+            online = sum(1 for b in bots if b.connected)
+            print(f"Online: {online}/{NUM_BOTS}")
     except KeyboardInterrupt:
-        print("\\n[!] Stopping...")
-        for bot in bots:
-            bot.connected = False
-        print("[OK] Done.")
+        print("\\n[!] Stoppe Bots...")
+        for b in bots:
+            b.connected = False
+        print("[OK] Fertig!")
 
 
 if __name__ == "__main__":
@@ -221,13 +147,14 @@ if __name__ == "__main__":
 '''
 
 with open('/mnt/agents/output/kahoot_bot.py', 'w') as f:
-    f.write(kahoot_bot)
-print("✅ kahoot_bot.py created")
+    f.write(kahoot_bot_simple)
 
-# Verify all files exist
-print("\n📁 Files in /mnt/agents/output/:")
-for f in os.listdir('/mnt/agents/output'):
-    size = os.path.getsize(f'/mnt/agents/output/{f}')
-    print(f"   {f} ({size} bytes)")
-
-print("\n✅ All files created successfully!")
+print("✅ Einfacher Kahoot Bot erstellt!")
+print("\n📁 Datei: /mnt/agents/output/kahoot_bot.py")
+print("\n📝 So verwendest du es:")
+print("   1. Öffne kahoot_bot.py")
+print("   2. Ändere die 3 Werte ganz oben:")
+print("      KAHOOT_PIN = '4693223'")
+print("      BOT_NAME   = 'bot'")
+print("      NUM_BOTS   = 10")
+print("   3. Speichern und starten: python kahoot_bot.py")
